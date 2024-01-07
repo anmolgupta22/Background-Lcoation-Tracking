@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">location tracking</string>
+    <!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
+    <string name="location_tracking">Location Tracking</string>
+    <string name="previous">Previous</string>
+    <string name="previous_location_tracking">Previous Location Tracking</string>
+</resources>
