@@ -5,20 +5,21 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
-import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
-import android.util.Log
+import android.os.Handler
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CompoundButton
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.app.ActivityCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.fragment.NavHostFragment
-import com.example.background_location_tracking.*
+import com.example.background_location_tracking.MainActivity
+import com.example.background_location_tracking.R
 import com.example.background_location_tracking.database.DBHelper
 import com.example.background_location_tracking.database.RoomDatabase
 import com.example.background_location_tracking.databinding.FragmentLocationTrackingBinding
@@ -63,6 +64,7 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     private val locationData: MutableList<LocationData> = arrayListOf()
     private lateinit var viewModel: LocationViewModel
     private lateinit var navHostFragment: NavHostFragment
+    private var checkLocation = false
 
 
     override fun onCreateView(
@@ -76,7 +78,7 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         if (isServiceRunning(requireContext(), LocationService::class.java)) {
-            binding.muteSwitch.isChecked = true
+            trueMuteSwitch()
         }
         val locationDao = DBHelper.getInstance(requireContext()).locationDao()
         val roomDatabase = RoomDatabase(locationDao)
@@ -126,7 +128,7 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     @Subscribe
     fun receiveLocationEvent(location: LocationEvent) {
         if (!binding.muteSwitch.isChecked) {
-            binding.muteSwitch.isChecked = true
+            trueMuteSwitch()
         }
         val mapLocation = LatLng(location.latitude!!, location.longitude!!)
         val data = LocationData(mapLocation, getCurrentDateTime())
@@ -151,18 +153,86 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     // checking the permission allowed
     private val onCheckedChangeListener = CompoundButton.OnCheckedChangeListener { _, isChecked ->
         if (isChecked) {
-            if (!PermissionUtils.isAccessFineLocationGranted(requireContext())) {
-                locationPermissions.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    )
-                )
-            } else {
-                showGPSOffDialog()
-            }
+            permissionCheck()
         } else {
             serviceStopLogic()
+        }
+    }
+
+    private fun permissionCheck() {
+        if (PermissionUtils.isAccessFineLocationGranted(requireContext())) {
+            if (PermissionUtils.isAccessBackgroundLocationGranted(requireContext())) {
+                if (PermissionUtils.isLocationEnabled(requireContext())) {
+                    requireActivity().startService(service)
+                } else {
+                    showGPSOffDialog()
+                }
+            } else {
+                if (PermissionUtils.isCheckBackgroundLocationPermissionDenied(requireActivity())) {
+                    falseMuteSwitch()
+                    backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                } else {
+                    falseMuteSwitch()
+                    openSettings()
+                }
+            }
+        } else {
+            PermissionUtils.requestLocationPermission(accessLocationResult)
+        }
+    }
+
+    private fun openSettings() {
+        Toast.makeText(requireContext(),
+            "allow the all time location permission",
+            Toast.LENGTH_LONG).show()
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+        intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+        val uri = Uri.fromParts("package", requireActivity().packageName, null)
+        intent.data = uri
+        requireActivity().startActivity(intent)
+    }
+
+
+    private val accessLocationResult = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        if (PermissionUtils.isAccessFineLocationGranted(requireContext())) {
+            if (PermissionUtils.isAccessBackgroundLocationGranted(requireContext())) {
+                if (PermissionUtils.isLocationEnabled(requireContext())) {
+                    requireActivity().startService(service)
+                } else {
+                    showGPSOffDialog()
+                }
+            } else {
+                if (PermissionUtils.isCheckBackgroundLocationPermissionDenied(requireActivity())) {
+                    falseMuteSwitch()
+                    backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                } else {
+                    falseMuteSwitch()
+                    openSettings()
+                }
+            }
+        } else {
+            falseMuteSwitch()
+        }
+    }
+
+    private val backgroundLocation = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        if (PermissionUtils.isAccessFineLocationGranted(requireContext())) {
+            if (PermissionUtils.isAccessBackgroundLocationGranted(requireContext())) {
+                if (PermissionUtils.isLocationEnabled(requireContext())) {
+                    trueMuteSwitch()
+                    requireActivity().startService(service)
+                } else {
+                    showGPSOffDialog()
+                }
+            } else {
+                falseMuteSwitch()
+            }
+        } else {
+            falseMuteSwitch()
         }
     }
 
@@ -181,6 +251,22 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
         }
     }
 
+
+    override fun onResume() {
+        super.onResume()
+        if (checkLocation) {
+            falseMuteSwitch()
+        }
+    }
+
+    private fun falseMuteSwitch() {
+        binding.muteSwitch.isChecked = false
+    }
+
+    private fun trueMuteSwitch() {
+        binding.muteSwitch.isChecked = true
+    }
+
     // dialog for gps enable
     private fun showGPSOffDialog() {
         val locationRequest = LocationRequest.create()
@@ -194,12 +280,12 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
         result.addOnCompleteListener { task ->
             try {
                 task.getResult(ApiException::class.java)
-                requireActivity().startService(service)
             } catch (e: ApiException) {
                 e.printStackTrace()
                 when (e.statusCode) {
                     LocationSettingsStatusCodes.RESOLUTION_REQUIRED -> try {
                         val resolveApiException = e as ResolvableApiException
+                        checkLocation = true
                         resolveApiException.startResolutionForResult(requireActivity(),
                             Constant.REQUEST_CODE_1)
 
@@ -209,34 +295,6 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
             }
         }
     }
-
-
-    private val backgroundLocation =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            if (it) {
-                showGPSOffDialog()
-            }
-        }
-
-    private val locationPermissions =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            when {
-                it.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false) -> {
-
-                    if (ActivityCompat.checkSelfPermission(
-                            requireContext(),
-                            Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                    }
-
-                }
-                it.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false) -> {
-
-                }
-            }
-        }
 
     // timestamp
     private fun getCurrentDateTime(): String {
@@ -262,7 +320,6 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
 
     // when service is stop then all list data add in the db after clear the list
     private fun serviceStopLogic() {
-        Toast.makeText(requireContext(),"Location Tracking Stop", Toast.LENGTH_LONG).show()
         requireActivity().stopService(service)
         currentMarker?.remove()
         if (locationData.isNotEmpty()) {
@@ -277,6 +334,7 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
 
     // gps dialog callback
     override fun gpsCallBack() {
+        checkLocation = false
         requireActivity().startService(service)
     }
 
