@@ -6,13 +6,13 @@ import android.graphics.Color
 import android.location.Location
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.example.background_location_tracking.*
 import com.example.background_location_tracking.R
 import com.example.background_location_tracking.model.LocationEvent
 import com.example.background_location_tracking.utils.Constant
 import com.google.android.gms.location.*
 import org.greenrobot.eventbus.EventBus
-
 
 class LocationService : Service() {
 
@@ -37,7 +37,9 @@ class LocationService : Service() {
         }
         notificationManager = this.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val notificationChannel =
-            NotificationChannel(Constant.CHANNEL_ID, "locations", NotificationManager.IMPORTANCE_DEFAULT)
+            NotificationChannel(Constant.CHANNEL_ID,
+                "locations",
+                NotificationManager.IMPORTANCE_DEFAULT)
         notificationChannel.lightColor = Color.BLUE
         notificationChannel.lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         notificationManager?.createNotificationChannel(notificationChannel)
@@ -59,7 +61,7 @@ class LocationService : Service() {
         locationCallback?.let {
             fusedLocationProviderClient?.removeLocationUpdates(it)
         }
-        stopForeground(true)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 

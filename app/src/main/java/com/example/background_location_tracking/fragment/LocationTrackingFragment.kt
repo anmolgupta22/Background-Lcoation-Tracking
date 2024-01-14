@@ -4,39 +4,31 @@ import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
-import android.content.IntentSender
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
 import android.provider.Settings
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CompoundButton
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.asLiveData
 import androidx.navigation.fragment.NavHostFragment
-import com.example.background_location_tracking.MainActivity
+import com.example.background_location_tracking.MyApplication
 import com.example.background_location_tracking.R
-import com.example.background_location_tracking.database.DBHelper
-import com.example.background_location_tracking.database.RoomDatabase
 import com.example.background_location_tracking.databinding.FragmentLocationTrackingBinding
 import com.example.background_location_tracking.model.LocationData
 import com.example.background_location_tracking.model.LocationDataList
 import com.example.background_location_tracking.model.LocationEvent
 import com.example.background_location_tracking.service.LocationService
-import com.example.background_location_tracking.utils.Constant
 import com.example.background_location_tracking.utils.PermissionUtils
 import com.example.background_location_tracking.viewmodel.LocationViewModel
 import com.example.background_location_tracking.viewmodel.LocationViewModelFactory
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.common.api.ResolvableApiException
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.LocationSettingsRequest
-import com.google.android.gms.location.LocationSettingsStatusCodes
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
@@ -44,15 +36,13 @@ import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.Marker
 import com.google.android.gms.maps.model.MarkerOptions
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import java.util.*
+import javax.inject.Inject
 
 
-class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.ResultGpsCallBack {
+class LocationTrackingFragment : Fragment(), OnMapReadyCallback {
 
     private var service: Intent? = null
     private var _binding: FragmentLocationTrackingBinding? = null
@@ -62,10 +52,25 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     private var googleMap: GoogleMap? = null
     private var currentMarker: Marker? = null
     private val locationData: MutableList<LocationData> = arrayListOf()
-    private lateinit var viewModel: LocationViewModel
+
+    @Inject
+    lateinit var viewModel: LocationViewModel
+
+    @Inject
+    lateinit var viewModelFactory: LocationViewModelFactory
+
     private lateinit var navHostFragment: NavHostFragment
     private var checkLocation = false
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requireActivity().onBackPressedDispatcher.addCallback(this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    requireActivity().finish()
+                }
+            })
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
@@ -77,19 +82,19 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        (requireActivity().application as MyApplication).appComponent.inject(this)
+        if (::viewModel.isInitialized) {
+            viewModel = ViewModelProvider(this, viewModelFactory)[LocationViewModel::class.java]
+        }
+
         if (isServiceRunning(requireContext(), LocationService::class.java)) {
             trueMuteSwitch()
         }
-        val locationDao = DBHelper.getInstance(requireContext()).locationDao()
-        val roomDatabase = RoomDatabase(locationDao)
-        viewModel = ViewModelProvider(this,
-            LocationViewModelFactory(roomDatabase))[LocationViewModel::class.java]
 
         navHostFragment = requireActivity().supportFragmentManager.findFragmentById(
             R.id.nav_graph_host_fragment
         ) as NavHostFragment
-
-        (activity as MainActivity?)?.setActivityListener(this)
 
         service = Intent(requireContext(), LocationService::class.java)
         mapFragment = SupportMapFragment.newInstance()
@@ -113,15 +118,15 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     }
 
     private fun checkDbLocationList() {
-        var locationDataList: List<LocationDataList>
-        CoroutineScope(Dispatchers.IO).launch {
-            locationDataList = viewModel.fetchAllLocationTracking()
-            CoroutineScope(Dispatchers.Main).launch {
-                if (locationDataList.isNotEmpty()) {
-                    binding.previousLocationBtn.visibility = View.VISIBLE
-                }
+        //calling db
+        viewModel.fetchAllLocationTracking()
+
+        viewModel.locationData.asLiveData().observe(this) { locationData ->
+            if (locationData.isNotEmpty()) {
+                binding.previousLocationBtn.visibility = View.VISIBLE
             }
         }
+
     }
 
     // (Event bus) if service is running then it will get the location latLng continue
@@ -151,13 +156,14 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
     }
 
     // checking the permission allowed
-    private val onCheckedChangeListener = CompoundButton.OnCheckedChangeListener { _, isChecked ->
-        if (isChecked) {
-            permissionCheck()
-        } else {
-            serviceStopLogic()
+    private val onCheckedChangeListener =
+        CompoundButton.OnCheckedChangeListener { _, isChecked ->
+            if (isChecked) {
+                permissionCheck()
+            } else {
+                serviceStopLogic()
+            }
         }
-    }
 
     private fun permissionCheck() {
         if (PermissionUtils.isAccessFineLocationGranted(requireContext())) {
@@ -269,31 +275,9 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
 
     // dialog for gps enable
     private fun showGPSOffDialog() {
-        val locationRequest = LocationRequest.create()
-        val builder = LocationSettingsRequest.Builder()
-            .addLocationRequest(locationRequest)
-        builder.setAlwaysShow(true)
-
-        val result = LocationServices.getSettingsClient(requireActivity())
-            .checkLocationSettings(builder.build())
-
-        result.addOnCompleteListener { task ->
-            try {
-                task.getResult(ApiException::class.java)
-            } catch (e: ApiException) {
-                e.printStackTrace()
-                when (e.statusCode) {
-                    LocationSettingsStatusCodes.RESOLUTION_REQUIRED -> try {
-                        val resolveApiException = e as ResolvableApiException
-                        checkLocation = true
-                        resolveApiException.startResolutionForResult(requireActivity(),
-                            Constant.REQUEST_CODE_1)
-
-                    } catch (sendIntentException: IntentSender.SendIntentException) {
-                    }
-                }
-            }
-        }
+        falseMuteSwitch()
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+        requireContext().startActivity(intent)
     }
 
     // timestamp
@@ -323,6 +307,7 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
         requireActivity().stopService(service)
         currentMarker?.remove()
         if (locationData.isNotEmpty()) {
+            Log.d("TAG", "serviceStopLogic: check the location $locationData")
             val locationDataList = LocationDataList(locationData = locationData)
             viewModel.insertLocationList(locationDataList)
         }
@@ -331,12 +316,5 @@ class LocationTrackingFragment : Fragment(), OnMapReadyCallback, MainActivity.Re
         }
         locationData.clear()
     }
-
-    // gps dialog callback
-    override fun gpsCallBack() {
-        checkLocation = false
-        requireActivity().startService(service)
-    }
-
 
 }

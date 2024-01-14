@@ -1,23 +1,27 @@
 package com.example.background_location_tracking.viewmodel
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.background_location_tracking.database.LocationRepository
 import com.example.background_location_tracking.model.LocationDataList
-import com.example.background_location_tracking.database.RoomDatabase
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 
-class LocationViewModel(private val roomDatabase: RoomDatabase) : ViewModel() {
+class LocationViewModel @Inject constructor(private val repository: LocationRepository) :
+    ViewModel() {
+    private val _locationData = MutableStateFlow<List<LocationDataList>>(emptyList())
+    val locationData: StateFlow<List<LocationDataList>> get() = _locationData
 
     fun insertLocationList(list: LocationDataList) {
-        roomDatabase.insertLocationList(list)
-    }
-
-    suspend fun fetchAllLocationTracking(): List<LocationDataList> {
-        return withContext(Dispatchers.IO) {
-            roomDatabase.fetchAllLocationTracking()
+        viewModelScope.launch {
+            repository.insertLocationList(list)
         }
     }
 
-
+    fun fetchAllLocationTracking() = viewModelScope.launch {
+        _locationData.value = repository.fetchAllLocationTracking()
+    }
 }
